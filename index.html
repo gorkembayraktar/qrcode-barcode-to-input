@@ -19,14 +19,20 @@
     <!-- barcode okuyucu için gerekli js-->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script> 
 
+
+    <style>
+        .container{
+            height:100vh;
+        }
+    </style>
 </head>
 <body>
 
 
-<div class="container">
+<div class="container d-flex justify-content-center align-items-center flex-column">
     <div class="h1">QRCODE-BARCODE TO INPUT</div>
     <div class="row">
-        <div class="col-4">
+        <div class="col-12">
             <div class="input-group">
                 <input class="form-control py-2 border-right-0 border" type="text" id="inputCodeValue">
                 <div class="input-group-append">
@@ -48,25 +54,37 @@
 
 <!-- Modal -->
 <div class="modal fade" id="cameraPreviewModal" tabindex="-1" aria-labelledby="cameraPreviewModalLabel" aria-hidden="true">
-<div class="modal-dialog">
-    <div class="modal-content">
-    <div class="modal-header">
-        <h5 class="modal-title" id="cameraPreviewModalLabel">Modal title</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-    </div>
-    <div class="modal-body">
-        <div id="barcode-scanner">
-            <video id="preview" class="w-100"></video>
+    <div class="modal-dialog">
+        <div class="modal-content">
+        <div class="modal-header">
+            <h5 class="modal-title" id="cameraPreviewModalLabel">Modal title</h5>
+             <select class="form-control form-control-sm float-right" style="width:100px" id="videoSource">
+                <option value="user" selected>Ön Kamera</option>
+                <option value="environment">Arka Kamera</option>
+             </select>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" style="margin:0;padding:0"></button>
+        </div>
+        <div class="modal-body">
+            <div id="barcode-scanner">
+                <video id="preview" class="w-100"></video>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <span id="errorMessage"></span>
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Kapat</button>
+        </div>
         </div>
     </div>
-    <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Kapat</button>
-    </div>
-    </div>
-</div>
 </div>
 
 <script>
+
+
+const types = {
+    QRCODE:0,
+    BARCODE:1
+};
+let selectedType = null;
     
 let barcodeDetect,qrCodeDetect;
 
@@ -78,7 +96,7 @@ let previewVideo  = document.getElementById('preview');
 barcodeDetect = document.querySelector('#barcodeDetect');
 qrCodeDetect = document.querySelector('#qrCodeDetect');
 
-
+let _scannerIsRunning = false; // set to true at the end of startScanner()
 
 let codeModal = new bootstrap.Modal(document.getElementById('cameraPreviewModal'), {
   keyboard: false
@@ -93,17 +111,65 @@ function setValue(value){
 
 
 
-barcodeDetect.addEventListener('click',function(){
+barcodeDetect.addEventListener('click', barcodeInit);
+
+
+async function barcodeInit(){
+    selectedType = types.BARCODE;
+
     document.querySelector('.modal-title').textContent = 'BAR CODE';
 
-    codeModal.show(modalToggle)
+    codeModal.show(modalToggle);
 
+    if(_scannerIsRunning) Quagga.stop();
 
+   
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        alert("enumerateDevices() not supported.");
+        return;
+    }
+
+    let backCamID;
+    let last_camera = null;
+    await navigator.mediaDevices.enumerateDevices()
+    .then(function(devices) {
+    devices.forEach(function(device) {  
+        if( device.kind == "videoinput" && device.label.match(/back/) !== null ){
+            backCamID = device.deviceId;
+            }
+        if( device.kind === "videoinput"){
+        last_camera = device.deviceId;
+        } 
+        });
+        if( backCamID === null){
+        backCamID = last_camera;
+        }
+    })
+    .catch(console.error);
+
+    if(typeof(backCamID)=="undefined"){
+        console.log("back camera not found.");
+        document.querySelector('#errorMessage').textContent = 'back camera not found.';
+
+        if( document.getElementById("videoSource").value == 'environment')
+            return;
+    }else{
+        document.querySelector('#errorMessage').textContent = '';
+    }
+
+    let constraints = {
+        facingMode: document.getElementById("videoSource").value
+    };
+
+    if( document.getElementById("videoSource").value == 'environment')
+        constraints.deviceId = backCamID;
+    
     Quagga.init({
         inputStream : {
-        name : "Live",
-        type : "LiveStream",
-            target: document.querySelector('#barcode-scanner')
+            name : "Live",
+            type : "LiveStream",
+            target: document.querySelector('#barcode-scanner'), 
+            constraints: constraints
         }, 
         decoder : {
         //readers : ["code_128_reader"]
@@ -123,14 +189,18 @@ barcodeDetect.addEventListener('click',function(){
         }
     }, function(err) {
         if (err) {
+            document.querySelector('#errorMessage').textContent = err.message;
             console.log(err);
             return
         }
         console.log("Initialization finished. Ready to start");
         Quagga.start();
+        document.querySelector('#errorMessage').textContent = '';
+        _scannerIsRunning = true;
+        console.log(Quagga)
     });
 
-
+  
 
     Quagga.onDetected(function(data){
         console.log(data);
@@ -144,53 +214,76 @@ barcodeDetect.addEventListener('click',function(){
         const drawingCanvas = Quagga.canvas.dom.overlay;
         drawingCanvas.style.display = 'none';
     });
-});
-let scanner;
+}
 
-qrCodeDetect.addEventListener('click',function(){
+
+let scanner, cameras;
+
+qrCodeDetect.addEventListener('click', qrCodeInit);
+
+function qrCodeInit(){
+
+    if(scanner) scanner.stop();
+
+    selectedType = types.QRCODE;
 
     codeModal.show(modalToggle)
 
     document.querySelector('.modal-title').textContent = 'QR CODE';
-    
-    scanner = new Instascan.Scanner({ video: previewVideo });
-      scanner.addListener('scan', function (content) {
-         console.log(content);
-         setValue(content);
-         scanner.stop();
-         codeModal.hide();
-      });
+
+    scanner = new Instascan.Scanner({ video: previewVideo, mirror: false });
+    scanner.addListener('scan', function (content) {
+        console.log(content);
+        setValue(content);
+        scanner.stop();
+        codeModal.hide();
+    });
 
 
-      Instascan.Camera.getCameras().then(function (cameras) {
-        if (cameras.length > 0) {
-          scanner.start(cameras[0]);
-         
-        } else {
-          console.error('No cameras found.');
-        }
+    Instascan.Camera.getCameras().then(function (_cameras) {
+        cameras = _cameras;
+        _camerasInit();
     }).catch(function (e) {
-
+        document.querySelector('#errorMessage').textContent = e.message;
         console.error(e);
     });
 
-    
-});
+}
+
+function _camerasInit(){
+    if(!scanner) return;
+
+    if (cameras.length > 0) {
+        if(document.getElementById("videoSource").value == 'user'){
+            scanner.start(cameras[0]);
+        }else{
+            scanner.start(cameras[1]);
+        }
+        document.querySelector('#errorMessage').textContent = '';
+    } else {
+        console.error('No cameras found.');
+        document.querySelector('#errorMessage').textContent = 'No cameras found.';
+    }
+}
+
+document.getElementById("videoSource").onchange = function(){
+    if(selectedType == types.BARCODE){
+        barcodeInit();
+    }else if(selectedType == types.QRCODE){
+        _camerasInit();
+    }
+}
 
 
 
 /* modal kapatıldığında okuyucuları kapatmak için */
 modalToggle.addEventListener('hidden.bs.modal', function (event) {
- 
- console.log('kapatıldı')
-
- if(scanner){
-    scanner.stop();
- }
-
- Quagga.stop();
-
- 
+    console.log('kapatıldı')
+    if( selectedType == types.BARCODE ){
+        if(_scannerIsRunning) Quagga.stop();
+    }else if( selectedType == types.QRCODE ){
+        if(scanner) scanner.stop();
+    }
 })
 
 
